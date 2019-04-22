@@ -3,10 +3,10 @@ pragma solidity ^0.5.0;
 import "./ERC20Token.sol";
 import "./IWinbixToken.sol";
 import "./IWinbixPayable.sol";
-import "../utils/MultiManageable.sol";
+import "../utils/Ownable.sol";
 import "../utils/MakePayable.sol";
 
-contract WinbixToken is IWinbixToken, ERC20Token, MultiManageable, MakePayable {
+contract WinbixToken is IWinbixToken, ERC20Token, Ownable, MakePayable {
 
     mapping (address => bool) private frozen;
     mapping (address => uint256) private votableBalances;
@@ -31,7 +31,7 @@ contract WinbixToken is IWinbixToken, ERC20Token, MultiManageable, MakePayable {
         totalSupply = 0;
     }
 
-    function setIssuer(address _address) public onlyManager {
+    function setIssuer(address _address) public onlyOwner {
         issuer = _address;
         emit SetIssuer(_address);
     }

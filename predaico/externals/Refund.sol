@@ -8,24 +8,20 @@ contract Refund is IRefund, Ownable {
 
     uint startDate;
 
-    function init(address _token, uint _tokensBase, address _tap, uint _startDate) public onlyOwner {
-        winbixToken = IWinbixToken(_token);
+    function init(uint _tokensBase, address _tap, uint _startDate) public onlyOwner {
         tap = ITap(_tap);
         tokensBase = _tokensBase;
         startDate = _startDate;
     }
 
-    function refundEther(address payable _address, uint _value) public onlyOwner returns (uint) {
-        require(startDate > 0 && now > startDate);
-        require(winbixToken.votableBalanceOf(_address) >= _value);
+    function refundEther(uint _value) public onlyOwner returns (uint) {
         uint etherForRefund = calculateEtherForRefund(_value);
-        if (etherForRefund > tap.remainsForTap()) etherForRefund = tap.remainsForTap();
         refundedTokens += _value;
         return etherForRefund;
     }
 
     function calculateEtherForRefund(uint _tokensAmount) public view returns (uint) {
-        require(tokensBase > 0);
+        require(startDate > 0 && now > startDate && tokensBase > 0);
         uint etherRemains = tap.remainsForTap();
         if (_tokensAmount == 0 || etherRemains == 0) {
             return 0;
@@ -33,25 +29,25 @@ contract Refund is IRefund, Ownable {
 
         uint etherForRefund;
 
-        uint start = refundedTokens + 1;
+        uint startPart = refundedTokens + 1;
         uint endValue = refundedTokens + _tokensAmount;
         require(endValue <= tokensBase);
 
         uint refundCoeff;
         uint nextStart;
-        uint end;
+        uint endPart;
         uint partTokensValue;
         uint tokensRemains = tokensBase - refundedTokens;
 
         while (true) {
-            refundCoeff = _refundCoeff(start);
+            refundCoeff = _refundCoeff(startPart);
             nextStart = _nextStart(refundCoeff);
-            end = nextStart - 1;
-            if (end > endValue) end = endValue;
-            partTokensValue = end - start + 1;
-            etherForRefund += refundCoeff * (etherRemains - etherForRefund) * 1 ether * partTokensValue / tokensRemains / 100 ether;
+            endPart = nextStart - 1;
+            if (endPart > endValue) endPart = endValue;
+            partTokensValue = endPart - startPart + 1;
+            etherForRefund += refundCoeff * (etherRemains - etherForRefund) * partTokensValue / tokensRemains / 100;
             if (nextStart > endValue) break;
-            start = nextStart;
+            startPart = nextStart;
             tokensRemains -= partTokensValue;
         }
         return etherForRefund;

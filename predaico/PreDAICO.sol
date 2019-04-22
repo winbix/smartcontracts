@@ -1,6 +1,6 @@
 pragma solidity ^0.5.0;
 
-import "../utils/MultiManageable.sol";
+import "../utils/Ownable.sol";
 import "../utils/SafeMath.sol";
 import "../token/IWinbixToken.sol";
 import "../token/WinbixPayable.sol";
@@ -9,7 +9,7 @@ import "./externals/IVoting.sol";
 import "./externals/ITap.sol";
 import "./externals/IRefund.sol";
 
-contract PreDAICO is MultiManageable, WinbixPayable, SafeMath {
+contract PreDAICO is Ownable, WinbixPayable, SafeMath {
 
     enum KycStates { None, OnCheck, Accepted, Rejected }
     enum VotingType { None, Prolongation, TapChange }
@@ -40,7 +40,10 @@ contract PreDAICO is MultiManageable, WinbixPayable, SafeMath {
     ITap public tap;
     IRefund public refund;
 
+    address public kycChecker;
+
     mapping (address => uint) public etherPaid;
+    mapping (address => uint) public wbxSold;
 
     uint public startDate;
     uint public endDate;
@@ -63,13 +66,18 @@ contract PreDAICO is MultiManageable, WinbixPayable, SafeMath {
         _;
     }
 
+    modifier onlyKycChecker {
+        require(msg.sender == kycChecker);
+        _;
+    }
+
     function setExternals(
         address _winbixToken,
         address _buyers,
         address _voting,
         address _tap,
         address _refund
-    ) public onlyManager {
+    ) public onlyOwner {
         if (address(winbixToken) == address(0)) {
             winbixToken = IWinbixToken(_winbixToken);
             winbixToken.setMePayable(true);
@@ -90,9 +98,14 @@ contract PreDAICO is MultiManageable, WinbixPayable, SafeMath {
             refund = IRefund(_refund);
             refund.acceptOwnership();
         }
+        kycChecker = msg.sender;
     }
 
-    function startPreDaico() public onlyManager {
+    function setKycChecker(address _address) public onlyOwner {
+        kycChecker = _address;
+    }
+
+    function startPreDaico() public onlyOwner {
         require(
             (startDate == 0) &&
             address(buyers) != address(0) &&
@@ -127,6 +140,7 @@ contract PreDAICO is MultiManageable, WinbixPayable, SafeMath {
         soldTokens += tokenValue;
         recievedEther += etherValue;
         etherPaid[msg.sender] += etherValue;
+        wbxSold[msg.sender] += tokenValue;
 
         winbixToken.transfer(msg.sender, tokenValue);
         winbixToken.issueVotable(msg.sender, tokenValue);
@@ -155,23 +169,23 @@ contract PreDAICO is MultiManageable, WinbixPayable, SafeMath {
         }
     }
 
-    function kycSuccess(address _address) public onlyManager {
+    function kycSuccess(address _address) public onlyKycChecker {
         require(now > endDate + SKIP_TIME && now < endDate + additionalTime + 15 days);
         require(!buyers.isAccepted(_address));
         etherAfterKyc += etherPaid[_address];
-        tokensAfterKyc += winbixToken.balanceOf(_address);
+        tokensAfterKyc += wbxSold[_address];
         winbixToken.unfreeze(_address);
         buyers.accept(_address);
     }
 
-    function kycFail(address _address) public onlyManager {
+    function kycFail(address _address) public onlyKycChecker {
         require(now > endDate + SKIP_TIME && now < endDate + additionalTime + 15 days);
         require(!buyers.isRejected(_address));
         if (buyers.isAccepted(_address)) {
             etherAfterKyc -= etherPaid[_address];
-            tokensAfterKyc -= winbixToken.balanceOf(_address);
+            tokensAfterKyc -= wbxSold[_address];
         }
-        if (!winbixToken.isFrozen(_address)) winbixToken.freeze(_address);
+        winbixToken.freeze(_address);
         buyers.reject(_address);
     }
 
@@ -188,10 +202,10 @@ contract PreDAICO is MultiManageable, WinbixPayable, SafeMath {
         winbixToken.burn(TOKENS_FOR_ISSUE - soldTokens - tokensForMarketingTotal);
         winbixToken.allowTransfer(true);
         tap.init(etherAfterKyc, endDate + additionalTime + 17 days + SKIP_TIME);
-        refund.init(address(winbixToken), tokensAfterKyc, address(tap), endDate + 45 days);
+        refund.init(tokensAfterKyc, address(tap), endDate + 45 days);
     }
 
-    function transferTokensForMarketing(address _to, uint _value) public onlyManager {
+    function transferTokensForMarketing(address _to, uint _value) public onlyOwner {
         require(_value <= tokensForMarketingRemains && buyers.isAcceptedOrNotInList(_to));
         winbixToken.transfer(_to, _value);
         winbixToken.issueAccruable(_to, _value);
@@ -199,12 +213,12 @@ contract PreDAICO is MultiManageable, WinbixPayable, SafeMath {
     }
 
     function burnTokensIfSoftcapNotCompiled() public {
-        require(now > endDate + 2 days + SKIP_TIME && soldTokens < SOFTCAP);
+        require(endDate > 0 && now > endDate + 2 days + SKIP_TIME && soldTokens < SOFTCAP);
         winbixToken.burnAll();
     }
 
 
-    function getTap() public onlyManager {
+    function getTap() public onlyOwner {
         uint tapValue = tap.getNext();
         address(msg.sender).transfer(tapValue);
         emit Tap(msg.sender, tapValue);
@@ -215,7 +229,7 @@ contract PreDAICO is MultiManageable, WinbixPayable, SafeMath {
         return voting.subject();
     }
 
-    function initCrowdsaleProlongationVoting() public onlyManager {
+    function initCrowdsaleProlongationVoting() public onlyOwner {
         require(now >= endDate + SKIP_TIME && now <= endDate + 12 hours);
         require(soldTokens >= SOFTCAP * 75 / 100);
         require(soldTokens <= HARDCAP * 90 / 100);
@@ -225,8 +239,8 @@ contract PreDAICO is MultiManageable, WinbixPayable, SafeMath {
         votingType = VotingType.Prolongation;
     }
 
-    function initTapChangeVoting(uint8 newPercent) public onlyManager {
-        require(soldTokens >= SOFTCAP);
+    function initTapChangeVoting(uint8 newPercent) public onlyOwner {
+        require(tokensForMarketingTotal > 0);
         require(now > endDate + 17 days);
         voting.initTapChangeVoting(newPercent);
         votingApplied = false;
@@ -308,12 +322,14 @@ contract PreDAICO is MultiManageable, WinbixPayable, SafeMath {
             ((state == KycStates.Rejected || state == KycStates.OnCheck) && (now > endDate + additionalTime + 17 days))
         ) {
             etherValue = etherPaid[_from];
-            require(etherValue > 0 && winbixToken.balanceOf(_from) == 0);
+            require(etherValue > 0 && _value == wbxSold[_from]);
             _from.transfer(etherValue);
             etherPaid[_from] = 0;
+            wbxSold[_from] = 0;
             winbixToken.unfreeze(_from);
         } else {
-            etherValue = refund.refundEther(_from, _value);
+            require(winbixToken.votableBalanceOf(_from) >= _value);
+            etherValue = refund.refundEther(_value);
             _from.transfer(etherValue);
             tap.subRemainsForTap(etherValue);
             emit Refund(_from, _value, etherValue);
